@@ -130,6 +130,10 @@ class Database {
 
 	}
 
+	function getLastInsertIds() {
+		return $this->lastInsertIds;
+	}
+
 	/**
 	 * Begin a transaction
 	 *
@@ -176,6 +180,8 @@ class Database {
 	function getPrimary( $table ) {
 
 		if ( isset( $this->primary[ $table ] ) ) {
+
+			if ( empty($this->primary[ $table ]) ) return null;
 
 			return $this->primary[ $table ];
 
@@ -464,6 +470,14 @@ class Database {
 
 	}
 
+	function ignore($ignore) {
+		$this->ignore = $ignore;
+	}
+
+	function overwriteOnDuplicate($overwriteOnDuplicate) {
+		$this->overwriteOnDuplicate = $overwriteOnDuplicate;
+	}
+
 	// Queries
 
 	/**
@@ -574,28 +588,44 @@ class Database {
 		$columns = $this->getColumns( $rows );
 		if ( empty( $columns ) ) return;
 
-		$query = $this->insertHead( $table, $columns );
+		$query  = $this->insertHead( $table, $columns );
 		$query .= "( ?" . str_repeat( ", ?", count( $columns ) - 1 ) . " )";
+		$query .= $this->insertTail( $table, $columns );
 
-		$statement = $this->prepare( $query );
+		$statement           = $this->prepare( $query );
+		$this->lastInsertIds = array();
 
-		foreach ( $rows as $row ) {
+		for ($i = 0; $i < count($rows); $i++) {
 
+//		}
+//		foreach ( $rows as $row ) {
+
+			$row = $rows[$i];
 			$values = array();
 
 			foreach ( $columns as $column ) {
 
-				$value = (string) $this->format( @$row[ $column ] );
+				$value = isset($row[$column]) ? (string) $this->format( @$row[ $column ] ) : null;
 				$values[] = $value;
 
 			}
 
 			$this->onQuery( $query, $values );
 
-			$statement->execute( $values );
+			try {
+				$statement->execute( $values );
+			}
+			catch (\PDOException $e) {
+//				--$i;
+//				sleep(3);
+//				continue;
+				return FALSE;
+			}
+
+
+			$this->lastInsertIds[] = $this->lastInsertId();
 
 		}
-
 		return $statement;
 
 	}
@@ -612,12 +642,11 @@ class Database {
 		$columns = $this->getColumns( $rows );
 		if ( empty( $columns ) ) return;
 
-		$query = $this->insertHead( $table, $columns );
-		$lists = $this->valueLists( $rows, $columns );
-		$query .= implode( ", ", $lists );
+		$query  = $this->insertHead( $table, $columns );
+		$lists  = $this->valueLists( $rows, $columns );
+		$query .= $this->insertTail( $table, $columns ) . implode( ", ", $lists );
 
 		$this->onQuery( $query );
-
 		$statement = $this->prepare( $query );
 		$statement->execute();
 
@@ -639,10 +668,11 @@ class Database {
 
 		$query = $this->insertHead( $table, $columns );
 		$lists = $this->valueLists( $rows, $columns );
+		$tail  = $this->insertTail( $table, $columns );
 
 		foreach ( $lists as $list ) {
 
-			$singleQuery = $query . $list;
+			$singleQuery = $query . $list . $tail;
 
 			$this->onQuery( $singleQuery );
 
@@ -666,11 +696,36 @@ class Database {
 
 		$quotedColumns = array_map( array( $this, 'quoteIdentifier' ), $columns );
 		$table = $this->rewriteTable( $table );
-		$query = "INSERT INTO " . $this->quoteIdentifier( $table );
+		$query = "INSERT ". ($this->ignore ? 'IGNORE' : '') ." INTO " . $this->quoteIdentifier( $table );
 		$query .= " ( " . implode( ", ", $quotedColumns ) . " ) VALUES ";
 
 		return $query;
 
+	}
+
+	/**
+	 * Build possible tail of INSERT query
+	 *
+	 * @param string $table
+	 * @param array $columns
+	 * @return string
+	 */
+	protected function insertTail( $table, $columns ) {
+
+		$tail = array();
+		if ($this->ignore AND $this->getPrimary( $table ) != null ) {
+			$tail[] = ' ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(`' . $this->getPrimary( $table ) .'`) ';
+		}
+
+		if ($this->overwriteOnDuplicate) {
+			foreach($columns as $c) {
+				$tail[] = " `$c`= CASE WHEN VALUES($c) <> '' THEN VALUES($c) ELSE $c END ";
+			}
+		}
+		$this->ignore               = false;
+		$this->overwriteOnDuplicate = false;
+
+		return empty($tail) ? '' : implode(',',$tail);
 	}
 
 	/**
@@ -759,8 +814,12 @@ class Database {
 
 		$this->onQuery( $query, $params );
 
-		$statement = $this->prepare( $query );
-		$statement->execute( $params );
+		try {
+			$statement = $this->prepare( $query );
+			$statement->execute( $params );
+		} catch (\PDOException $e) {
+			return FALSE;
+		}
 
 		return $statement;
 
@@ -1075,6 +1134,7 @@ class Database {
 	//
 
 	/** @var string */
+	/** @var string */
 	protected $identifierDelimiter = "`";
 
 	//
@@ -1105,4 +1165,12 @@ class Database {
 	/** @var null|callable */
 	protected $queryCallback;
 
+	/** @var bool  */
+	protected $ignore = false;
+
+	/** @var bool  */
+	protected $overwriteOnDuplicate = false;
+
+	/** @var array  */
+	protected $lastInsertIds = array();
 }

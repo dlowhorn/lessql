@@ -355,6 +355,17 @@ class Result implements \IteratorAggregate, \JsonSerializable {
 
 	}
 
+	function setIgnore($ignore = TRUE) {
+		$this->db->ignore($ignore);
+		return $this;
+	}
+
+	function setOverwriteOnDuplicate($overwrite = TRUE) {
+		$this->db->overwriteOnDuplicate($overwrite);
+		return $this;
+	}
+
+
 	/**
 	 * Fetch the next row in this result
 	 *
